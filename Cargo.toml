@@ -12,4 +12,5 @@ log = "0.4"
 pewcraft_common = { path = "../pewcraft_common" }
 serde = "1.0"
 serde_json = "1.0"
-reqwest = "0.10"
+reqwest = {version = "0.10", features = ["blocking", "json"]}
+termion = "1.5"
