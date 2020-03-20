@@ -73,8 +73,8 @@ fn main() {
     let map_ids = game.maps.ids();
 
     let stdin = stdin();
-    let stdout = stdout();
-    let mut tui = tui::Tui::new(&game, &stdin, &stdout);
+    let mut stdout = stdout();
+    let mut tui = tui::Tui::new(&game, &stdin, &mut stdout);
     let mut state_machine = GlobalState::SelectMap(map_ids, 0);
 
     loop {

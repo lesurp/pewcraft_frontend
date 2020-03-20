@@ -1,66 +1,124 @@
-use crate::tui::map::{FormatMap, FormatMapSelection};
+use crate::tui::map::FormatMap;
 use crate::{CreatingGameState, CreatingGameSubstate, GlobalState, Input};
+use crossterm::{
+    event::{read, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use log::{debug, info};
 use pewcraft_common::game::{Cell, GameDefinition, GameMap, Id};
 use std::fmt::{self, Display, Formatter};
-use std::io::{Stdin, StdinLock, Stdout, Write};
-use termion::{
-    clear,
-    cursor::{self, DetectCursorPos, Down, Goto},
-    event::Key,
-    input::{Keys, TermRead},
-    raw::{IntoRawMode, RawTerminal},
-    screen::AlternateScreen,
-    style,
-};
+use std::io::{Bytes, Read, Stdin, StdinLock, Stdout, StdoutLock, Write};
+use tui::backend::CrosstermBackend;
+use tui::layout::Alignment;
+use tui::layout::{Constraint, Direction, Layout};
+use tui::style::{Modifier, Style};
+use tui::widgets::{Block, Borders, Widget};
+use tui::widgets::{Paragraph, Text};
+use tui::Terminal;
+
+const SELECT_MAP_BLOCK_TITLE: &str = "Select map";
+const CREATING_CHARACTER_BLOCK_TITLE: &str = "Create character";
 
 pub struct Tui<'a> {
     game_definition: &'a GameDefinition,
-    stdin: Keys<StdinLock<'a>>,
-    stdout: AlternateScreen<RawTerminal<std::io::StdoutLock<'a>>>,
+    //stdin: Bytes<StdinLock<'a>>,
+    stdout: Terminal<CrosstermBackend<StdoutLock<'a>>>,
 }
 
 impl<'a> Tui<'a> {
-    pub fn new(game_definition: &'a GameDefinition, stdin: &'a Stdin, stdout: &'a Stdout) -> Self {
-        let stdout = AlternateScreen::from(stdout.lock().into_raw_mode().unwrap());
-        let stdin = stdin.lock().keys();
+    pub fn new(game_definition: &'a GameDefinition, _: &'a Stdin, stdout: &'a mut Stdout) -> Self {
+        enable_raw_mode().unwrap();
+        execute!(stdout, EnterAlternateScreen).unwrap();
+        let backend = CrosstermBackend::new(stdout.lock());
+        //let stdin = stdin.lock().bytes();
+        let stdout = Terminal::new(backend).unwrap();
         Tui {
             game_definition,
-            stdin,
+            //stdin,
             stdout,
         }
     }
 
     pub fn get_input(&mut self) -> Input {
-        let b = &self.stdin.next().unwrap().unwrap();
-        match b {
-            // Quit
-            Key::Char('q') => Input::Exit,
-            Key::Char('l') => Input::Right,
-            Key::Char('h') => Input::Left,
-            Key::Char('\n') => Input::Confirm,
+        //let b = &self.stdin.next().unwrap().unwrap();
+        match read().unwrap() {
+            Event::Key(key) => match key.code {
+                KeyCode::Char('q') => Input::Exit,
+                KeyCode::Char('l') => Input::Right,
+                KeyCode::Char('h') => Input::Left,
+                KeyCode::Enter => Input::Confirm,
+                _ => Input::Other,
+            },
             _ => Input::Other,
         }
     }
 
     pub fn render(&mut self, s: &GlobalState) -> Input {
         debug!("tui.rs:render");
+        let game_definition = self.game_definition;
+        self.stdout.hide_cursor().unwrap();
+        self.stdout
+            .draw(|mut f| {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(1)
+                    .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+                    .split(f.size());
 
-        self.pre_render();
+                match s {
+                    GlobalState::CreatingGame(created_game) => {
+                        FormatMap(created_game.map, None).render(&mut f, chunks[0]);
+                    }
+                    //GlobalState::JoinedGame(joined_game) => self.render_joined_game(joined_game),
+                    GlobalState::SelectMap(map_ids, curr_id) => {
+                        let map = game_definition
+                            .maps
+                            .get(*map_ids.get(*curr_id).unwrap())
+                            .unwrap();
+                        FormatMap(map, None).render(&mut f, chunks[0]);
+
+                        let text = [
+                            Text::styled(
+                                format!("    {} / {}", curr_id + 1, map_ids.len()),
+                                Style::default().modifier(Modifier::BOLD),
+                            ),
+                            Text::raw("\n    Name:      "),
+                            Text::raw(format!("{}", map.name)),
+                            Text::raw("\n    Width:     "),
+                            Text::raw(format!("{}", map.width)),
+                            Text::raw("\n    Height:    "),
+                            Text::raw(format!("{}", map.height)),
+                            Text::raw("\n    Max teams: "),
+                            Text::raw(format!("{}", map.teams.len())),
+                        ];
+
+                        Paragraph::new(text.iter())
+                            .block(
+                                Block::default()
+                                    .title(SELECT_MAP_BLOCK_TITLE)
+                                    .borders(Borders::ALL),
+                            )
+                            .alignment(Alignment::Left)
+                            .render(&mut f, chunks[1]);
+                    }
+                    GlobalState::Exit => {
+                        panic!("Should not try to render when in the 'Exit' state")
+                    }
+                };
+            })
+            .unwrap();
+
         debug!("Current state: {:?}", s);
 
-        match s {
-            GlobalState::CreatingGame(created_game) => self.render_created_game(created_game),
-            //GlobalState::JoinedGame(joined_game) => self.render_joined_game(joined_game),
-            GlobalState::SelectMap(map_ids, curr_id) => self.select_map(map_ids, *curr_id),
-            GlobalState::Exit => panic!("Should not try to render when in the 'Exit' state"),
-        }
-
-        self.stdout.flush().unwrap();
         self.get_input()
     }
 
-    pub fn render_created_game(&mut self, created_game: &CreatingGameState) {
+    pub fn render_created_game(created_game: &CreatingGameState) -> Block<'static> {
+        Block::default()
+            .title(CREATING_CHARACTER_BLOCK_TITLE)
+            .borders(Borders::ALL)
+        /*
         debug!("render_created_game");
 
         // used to align the character name prompt
@@ -99,50 +157,13 @@ impl<'a> Tui<'a> {
             Goto(prompt_pos.0, prompt_pos.1)
         )
         .unwrap();
+        */
     }
+}
 
-    pub fn pre_render(&mut self) {
-        write!(
-            self.stdout,
-            "{}{}{}{}",
-            clear::All,
-            style::Reset,
-            cursor::Hide,
-            Goto(2, 2)
-        )
-        .unwrap()
-    }
-
-    pub fn select_map(&mut self, map_ids: &[Id<GameMap>], curr_id: usize) {
-        debug!("select_map");
-
-        let curr_map = self
-            .game_definition
-            .maps
-            .get(*map_ids.get(curr_id).unwrap())
-            .unwrap();
-
-        write!(self.stdout, "Select your map:\t").unwrap();
-        let pos_first_line = self.stdout.cursor_pos().unwrap();
-        let pos = (pos_first_line.0, pos_first_line.1 + 1);
-
-        write!(
-            self.stdout,
-            "{}{}/{}{}{}",
-            termion::style::Invert,
-            curr_id + 1,
-            map_ids.len(),
-            termion::style::NoInvert,
-            termion::cursor::Goto(pos.0, pos.1),
-        )
-        .unwrap();
-        write!(self.stdout, "{}", FormatMapSelection(curr_map, pos)).unwrap();
-        write!(
-            self.stdout,
-            "{}{}",
-            Goto(5, 5),
-            FormatMap(curr_map, None, (5, 5))
-        )
-        .unwrap()
+impl<'a> Drop for Tui<'a> {
+    fn drop(&mut self) {
+        disable_raw_mode().unwrap();
+        execute!(self.stdout.backend_mut(), LeaveAlternateScreen).unwrap();
     }
 }

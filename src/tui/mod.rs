@@ -1,4 +1,4 @@
 mod tui;
-pub use tui::*;
+pub use self::tui::*;
 
 mod map;
