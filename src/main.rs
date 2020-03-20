@@ -1,17 +1,57 @@
 use env_logger;
 use log::{debug, info};
-use pewcraft_common::game::{GameMap, Id};
+use pewcraft_common::game::{GameMap, GameState, Id};
+use pewcraft_common::io::WireCreatedGame;
 use std::io::{stdin, stdout};
 
 mod api;
 mod tui;
 
+/*
 #[derive(Debug)]
-pub enum State {
+pub enum JoinedGameSubstate {
+    CreateCharacter,
+}
+
+#[derive(Debug)]
+pub struct JoinedGameState<'a> {
+    game_id: String,
+    game_state: GameState,
+    map: &'a GameMap,
+    substate: JoinedGameSubstate,
+}
+*/
+
+#[derive(Debug)]
+pub enum CreatingGameSubstate {
+    CreateCharacter,
+    WaitingForOtherPlayers,
+}
+
+#[derive(Debug)]
+pub struct CreatingGameState<'a> {
+    game_id: String,
+    map: &'a GameMap,
+    substate: CreatingGameSubstate,
+}
+
+#[derive(Debug)]
+pub enum GlobalState<'a> {
     //CreateOrJoin,
     SelectMap(Vec<Id<GameMap>>, usize),
-    CreateCharacter,
+    CreatingGame(CreatingGameState<'a>),
+    //JoinedGame(JoinedGameState<'a>),
     Exit,
+}
+
+impl<'a> GlobalState<'a> {
+    pub fn join_game(created_game: WireCreatedGame, map: &'a GameMap) -> Self {
+        GlobalState::CreatingGame(CreatingGameState {
+            game_id: created_game.0,
+            substate: CreatingGameSubstate::CreateCharacter,
+            map,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -35,7 +75,7 @@ fn main() {
     let stdin = stdin();
     let stdout = stdout();
     let mut tui = tui::Tui::new(&game, &stdin, &stdout);
-    let mut state_machine = State::SelectMap(map_ids, 0);
+    let mut state_machine = GlobalState::SelectMap(map_ids, 0);
 
     loop {
         debug!("Current state: {:?}", state_machine);
@@ -45,27 +85,32 @@ fn main() {
         match (state_machine, input) {
             (_, Input::Exit) => break,
             (unchanged, Input::Other) => state_machine = unchanged,
-            (State::SelectMap(map_ids, mut curr_id), Input::Right) => {
+            (GlobalState::SelectMap(map_ids, mut curr_id), Input::Right) => {
                 if curr_id == map_ids.len() - 1 {
                     curr_id = 0
                 } else {
                     curr_id += 1;
                 }
-                state_machine = State::SelectMap(map_ids, curr_id);
+                state_machine = GlobalState::SelectMap(map_ids, curr_id);
             }
-            (State::SelectMap(map_ids, mut curr_id), Input::Left) => {
+            (GlobalState::SelectMap(map_ids, mut curr_id), Input::Left) => {
                 if curr_id == 0 {
                     curr_id = map_ids.len() - 1;
                 } else {
                     curr_id -= 1;
                 }
-                state_machine = State::SelectMap(map_ids, curr_id);
+                state_machine = GlobalState::SelectMap(map_ids, curr_id);
             }
-            (State::SelectMap(map_ids, curr_id), Input::Confirm) => {
+            (GlobalState::SelectMap(map_ids, curr_id), Input::Confirm) => {
                 let map_id = *map_ids.get(curr_id).unwrap();
                 // TODO hardcoded team size
-                endpoint.create_game(map_id, 2);
-                state_machine = State::CreateCharacter;
+                // TODO this can fail :)
+                let created_game = endpoint.create_game(map_id, 2);
+                let map = game.maps.get(map_id).unwrap();
+                state_machine = GlobalState::join_game(created_game, map);
+            }
+            (GlobalState::CreatingGame(created_game), _) => {
+                state_machine = GlobalState::CreatingGame(created_game)
             }
             _ => unimplemented!(),
         }
