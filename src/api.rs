@@ -1,16 +1,43 @@
-use reqwest::{Url, blocking};
-use pewcraft_common::game::GameDefinition;
+use log::{debug, info};
+use pewcraft_common::game::{GameDefinition, GameMap, Id};
+use pewcraft_common::io::{WireCreatedGame, WireNewGameRequest};
+use reqwest::{
+    blocking::{self, Client},
+    Url,
+};
 
 pub struct Endpoint {
     url: Url,
+    client: Client,
 }
 
 impl Endpoint {
     pub fn new<S: AsRef<str>>(url: S) -> Self {
-        Endpoint { url: Url::parse(url.as_ref()).unwrap() }
+        info!("API endpoint: {}", url.as_ref());
+        Endpoint {
+            url: Url::parse(url.as_ref()).unwrap(),
+            client: Client::new(),
+        }
     }
 
     pub fn load_game(&self) -> GameDefinition {
-        blocking::get(self.url.join("/game").unwrap()).unwrap().json().unwrap()
+        self.client
+            .get(self.url.join("game").unwrap())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    }
+
+    pub fn create_game(&self, map: Id<GameMap>, team_size: usize) -> WireCreatedGame {
+        let new_game_request = WireNewGameRequest { map, team_size };
+        debug!("Creating game with request: {:?}", new_game_request);
+        self.client
+            .post(self.url.join("new_game").unwrap())
+            .json(&new_game_request)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
     }
 }
