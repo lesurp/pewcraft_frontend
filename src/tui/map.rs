@@ -2,9 +2,8 @@ use ::tui::buffer::Buffer;
 use ::tui::layout::Rect;
 use ::tui::widgets::Widget;
 
-use log::{debug, info};
-use pewcraft_common::game::{Cell, Character, GameDefinition, GameMap, Id, IdMap};
-use std::fmt::{self, Display, Formatter};
+use log::debug;
+use pewcraft_common::game::{Cell, Character, GameMap, Id, IdMap};
 
 struct CellCorner(char, char, char, char);
 impl CellCorner {
