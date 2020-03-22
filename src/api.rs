@@ -1,10 +1,8 @@
 use log::{debug, info};
 use pewcraft_common::game::{GameDefinition, GameMap, Id};
 use pewcraft_common::io::{WireCreatedGame, WireNewGameRequest};
-use reqwest::{
-    blocking::{self, Client},
-    Url,
-};
+use reqwest::{blocking::Client, Url};
+use std::fmt;
 
 pub struct Endpoint {
     url: Url,
@@ -39,5 +37,11 @@ impl Endpoint {
             .unwrap()
             .json()
             .unwrap()
+    }
+}
+
+impl fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Endpoint {{ url: {:?}, client: <hidden> }}", self.url)
     }
 }
