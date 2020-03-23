@@ -1,4 +1,7 @@
-use crate::state::{CreateCharacterState, CreateGameState, GlobalState, Input, SelectMapData};
+use crate::state::{
+    CreateCharacterState, CreateGameState, GlobalState, Input, PlayGameState, PlayGameStateData,
+    SelectMapData,
+};
 use crate::tui::map::FormatMap;
 use crossterm::{
     event::{read, Event, KeyCode},
@@ -18,6 +21,7 @@ use tui::widgets::{Paragraph, Text};
 use tui::{Frame, Terminal};
 
 const SELECT_MAP_BLOCK_TITLE: &str = "Select map";
+const CREATE_CHAR_BLOCK_TITLE: &str = "Create your character";
 
 pub struct Tui<'a> {
     game_definition: &'a GameDefinition,
@@ -43,10 +47,13 @@ impl<'a> Tui<'a> {
         //let b = &self.stdin.next().unwrap().unwrap();
         match read().unwrap() {
             Event::Key(key) => match key.code {
-                KeyCode::Char('q') => Input::Exit,
-                KeyCode::Char('l') => Input::Right,
-                KeyCode::Char('h') => Input::Left,
+                KeyCode::Left => Input::Left,
+                KeyCode::Right => Input::Right,
+                KeyCode::Up => Input::Up,
+                KeyCode::Down => Input::Down,
+                KeyCode::Char(c) => Input::PrintableChar(c),
                 KeyCode::Enter => Input::Confirm,
+                KeyCode::Backspace => Input::Backspace,
                 _ => Input::Other,
             },
             _ => Input::Other,
@@ -65,49 +72,15 @@ impl<'a> Tui<'a> {
 
         debug!("Current state: {:?}", s);
 
+        if matches!(
+            s,
+            GlobalState::CreateGame(CreateGameState::WaitingForOtherPlayers(_))
+        ) {
+            return Input::Timeout;
+        }
+
         self.get_input()
     }
-
-    /*
-    debug!("render_created_game");
-
-    // used to align the character name prompt
-    let pos_first_line = self.stdout.cursor_pos().unwrap();
-    write!(self.stdout, "Game id: {}", &created_game.game_id,).unwrap();
-    write!(
-        self.stdout,
-        "{}{}Choose your name: ",
-        Goto(pos_first_line.0, pos_first_line.1),
-        Down(1)
-    )
-    .unwrap();
-    // now the prompt points after the "choose your name" - we save it for later
-    let prompt_pos = self.stdout.cursor_pos().unwrap();
-
-    // move the cursor to the map drawing area
-    let beg_map = (5, 5);
-    write!(self.stdout, "{}", Goto(beg_map.0, beg_map.1)).unwrap();
-
-    // ... and draw the map
-    match created_game.substate {
-        _ => write!(
-            self.stdout,
-            "{}",
-            FormatMap(created_game.map, None, beg_map)
-        )
-        .unwrap(),
-    }
-
-    // now go back to the prompt...
-    write!(
-        self.stdout,
-        "{}{}{}",
-        cursor::Show,
-        cursor::BlinkingBlock,
-        Goto(prompt_pos.0, prompt_pos.1)
-    )
-    .unwrap();
-    */
 }
 
 impl<'a> Drop for Tui<'a> {
@@ -143,6 +116,9 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
             //GlobalState::JoinedGame(joined_game) => self.render_joined_game(joined_game),
             GlobalState::SelectMap(select_map) => {
                 self.select_map(select_map);
+            }
+            GlobalState::PlayGame(play_game) => {
+                self.play_game(play_game);
             }
             GlobalState::Exit => panic!("Should not try to render when in the 'Exit' state"),
         };
@@ -184,14 +160,28 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
                 Paragraph::new(text.iter())
                     .block(
                         Block::default()
-                            .title(SELECT_MAP_BLOCK_TITLE)
+                            .title(CREATE_CHAR_BLOCK_TITLE)
                             .borders(Borders::ALL),
                     )
                     .alignment(Alignment::Left)
                     .render(self.f, self.chunks[1]);
                 s.curr().map
             }
-            CreateCharacterState::Name(s) => s.curr().map,
+            CreateCharacterState::Name(s) => {
+                let text = [Text::raw(format!(
+                    "    Now type your name: {}",
+                    s.curr().name
+                ))];
+                Paragraph::new(text.iter())
+                    .block(
+                        Block::default()
+                            .title(CREATE_CHAR_BLOCK_TITLE)
+                            .borders(Borders::ALL),
+                    )
+                    .alignment(Alignment::Left)
+                    .render(self.f, self.chunks[1]);
+                s.curr().map
+            }
             CreateCharacterState::Team(s) => {
                 let curr_id = s.curr().team_index;
                 let team_ids = &s.curr().teams;
@@ -214,7 +204,7 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
                 Paragraph::new(text.iter())
                     .block(
                         Block::default()
-                            .title(SELECT_MAP_BLOCK_TITLE)
+                            .title(CREATE_CHAR_BLOCK_TITLE)
                             .borders(Borders::ALL),
                     )
                     .alignment(Alignment::Left)
@@ -253,6 +243,20 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
                     .borders(Borders::ALL),
             )
             .alignment(Alignment::Left)
+            .render(self.f, self.chunks[1]);
+    }
+
+    fn play_game(self, s: &PlayGameState) {
+        match s {
+            PlayGameState::NotOurTurn(s) | PlayGameState::OurTurn(s) => {
+                let map = s.prev().game.maps.get(s.curr().game_state.map).unwrap();
+                FormatMap(map, None).render(self.f, self.chunks[0]);
+            }
+        }
+
+        Block::default()
+            .title("PLAYING THE GAME ASODUHASUOB")
+            .borders(Borders::ALL)
             .render(self.f, self.chunks[1]);
     }
 }
