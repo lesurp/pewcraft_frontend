@@ -1,5 +1,5 @@
 use log::{debug, info};
-use pewcraft_common::game::{GameDefinition, GameMap, Id};
+use pewcraft_common::game::{GameDefinition, GameState, GameMap, Id};
 use pewcraft_common::io::{WireCreatedGame, WireNewGameRequest};
 use reqwest::{blocking::Client, Url};
 use std::fmt;
@@ -33,6 +33,15 @@ impl Endpoint {
         self.client
             .post(self.url.join("new_game").unwrap())
             .json(&new_game_request)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    }
+
+    pub fn game_state<S: AsRef<str>>(&self, game_id: S) -> Option<GameState> {
+        self.client
+            .get(self.url.join(game_id.as_ref()).unwrap())
             .send()
             .unwrap()
             .json()
