@@ -1,6 +1,6 @@
 use log::{debug, info};
 use pewcraft_common::game::{GameDefinition, GameState, GameMap, Id};
-use pewcraft_common::io::{WireCreatedGame, WireNewGameRequest};
+use pewcraft_common::io::{WireCreatedGame, WireNewGameRequest, WireNewCharRequest, WireCreatedChar};
 use reqwest::{blocking::Client, Url};
 use std::fmt;
 
@@ -27,12 +27,22 @@ impl Endpoint {
             .unwrap()
     }
 
-    pub fn create_game(&self, map: Id<GameMap>, team_size: usize) -> WireCreatedGame {
-        let new_game_request = WireNewGameRequest { map, team_size };
-        debug!("Creating game with request: {:?}", new_game_request);
+    pub fn create_game(&self, request: WireNewGameRequest) -> WireCreatedGame {
+        debug!("Creating game with request: {:?}", request);
         self.client
             .post(self.url.join("new_game").unwrap())
-            .json(&new_game_request)
+            .json(&request)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    }
+
+    pub fn create_char<S: AsRef<str>>(&self, game_id: S, request: WireNewCharRequest) -> WireCreatedChar {
+        debug!("Creating char with request: {:?}", request);
+        self.client
+            .post(self.url.join(game_id.as_ref()).unwrap())
+            .json(&request)
             .send()
             .unwrap()
             .json()
