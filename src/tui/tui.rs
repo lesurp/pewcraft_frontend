@@ -1,6 +1,5 @@
 use crate::state::{
-    CreateCharacterState, CreateGameState, GlobalState, Input, PlayGameState, PlayGameStateData,
-    SelectMapData,
+    CreateCharacterState, GlobalState, Input, PlayGameState, PlayGameStateData, SelectMapData,
 };
 use crate::tui::map::FormatMap;
 use crossterm::{
@@ -72,10 +71,7 @@ impl<'a> Tui<'a> {
 
         debug!("Current state: {:?}", s);
 
-        if matches!(
-            s,
-            GlobalState::CreateGame(CreateGameState::WaitingForOtherPlayers(_))
-        ) {
+        if matches!(s, GlobalState::WaitForGameCreation(_)) {
             return Input::Timeout;
         }
 
@@ -110,8 +106,8 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
 
     fn render_impl(self) {
         match self.s {
-            GlobalState::CreateGame(create_game) => {
-                self.create_game(create_game);
+            GlobalState::CreateCharacter(create_character) => {
+                self.create_character(create_character);
             }
             //GlobalState::JoinedGame(joined_game) => self.render_joined_game(joined_game),
             GlobalState::SelectMap(select_map) => {
@@ -120,21 +116,29 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
             GlobalState::PlayGame(play_game) => {
                 self.play_game(play_game);
             }
+            // TODO
+            GlobalState::WaitForGameCreation(game_state) => {
+                let full_login =
+                    format!("{}/{}", game_state.curr().game_id, game_state.curr().login);
+                Block::default()
+                    .title(&format!(
+                        "Waiting for other players | Character login: {}",
+                        full_login
+                    ))
+                    .borders(Borders::ALL)
+                    .render(self.f, self.chunks[1]);
+            }
             GlobalState::Exit => panic!("Should not try to render when in the 'Exit' state"),
         };
     }
 
-    fn create_game(self, create_game: &CreateGameState) {
-        match create_game {
-            CreateGameState::WaitingForOtherPlayers(_) => {
-                Block::default()
-                    .title("Waiting for other players to join and create their characters :)")
-                    .borders(Borders::ALL)
-                    .render(self.f, self.chunks[1]);
-            }
-            CreateGameState::CreateCharacter(s) => self.create_character(&s),
+    /*
+    match create_character {
+        CreateGameState::WaitingForOtherPlayers(_) => {
         }
+        CreateGameState::CreateCharacter(s) => self.create_character(&s),
     }
+    */
 
     fn create_character(self, create_character: &CreateCharacterState) {
         let map = match create_character {
@@ -199,6 +203,32 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
                     Text::raw("\n    Name:         "),
                     Text::raw(&team.0),
                     Text::raw("\n    TODO store the nb of players, and what classes are already taken etc. OR EVEN BETTER<, SHOW THEM ON THE MAP!")
+                ];
+
+                Paragraph::new(text.iter())
+                    .block(
+                        Block::default()
+                            .title(CREATE_CHAR_BLOCK_TITLE)
+                            .borders(Borders::ALL),
+                    )
+                    .alignment(Alignment::Left)
+                    .render(self.f, self.chunks[1]);
+                s.curr().map
+            }
+            CreateCharacterState::Position(s) => {
+                let curr_id = s.curr().position_index;
+                let positions = &s.curr().map.teams.get(s.curr().team_index).unwrap().1;
+                let position = positions.get(curr_id).unwrap();
+
+                let (x, y) = s.curr().map.id_to_xy(*position);
+                let text = [
+                    Text::styled(
+                        format!("    {} / {}", curr_id + 1, positions.len()),
+                        Style::default().modifier(Modifier::BOLD),
+                    ),
+                    Text::raw("\n    Initial position:         "),
+                    Text::raw(format!("X: {}", x)),
+                    Text::raw(format!("Y: {}", y)),
                 ];
 
                 Paragraph::new(text.iter())
