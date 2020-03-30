@@ -1,4 +1,4 @@
-use crate::state::GlobalState;
+use crate::state::{GlobalState, State};
 use log::{debug, info};
 use std::io::{stdin, stdout};
 

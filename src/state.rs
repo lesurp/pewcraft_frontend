@@ -6,8 +6,9 @@ use pewcraft_common::io::{
 };
 
 #[derive(Debug)]
-pub enum Input {
+pub enum Event {
     Timeout,
+    PrintableString(String),
     Exit,
     Left,
     Right,
@@ -16,7 +17,21 @@ pub enum Input {
     Backspace,
     Confirm,
     Other,
-    PrintableChar(char),
+}
+
+#[derive(Debug)]
+pub enum ExpectedEvent {
+    Char,
+    SelectionVertical,
+    SelectionHorizontal,
+    Selection,
+    None,
+}
+
+pub trait State {
+    type RootState: State<RootState = Self::RootState>;
+    fn expected_event(&self) -> ExpectedEvent;
+    fn next(self, i: Event) -> Self::RootState;
 }
 
 #[derive(Debug)]
@@ -32,10 +47,6 @@ impl<P, C> StateData<P, C> {
 
     pub fn curr(&self) -> &C {
         &self.1
-    }
-
-    fn prev_mut(&mut self) -> &mut P {
-        &mut self.0
     }
 
     fn curr_mut(&mut self) -> &mut C {
@@ -54,7 +65,6 @@ pub enum GlobalState<'a> {
     WaitForGameCreation(WaitForGameCreationData<'a>),
     CreateCharacter(CreateCharacterState<'a>),
     PlayGame(PlayGameState<'a>),
-    //JoinedGame(JoinedGameState<'a>),
     Exit,
 }
 
@@ -64,29 +74,26 @@ pub struct GlobalStateData<'a> {
     endpoint: &'a api::Endpoint,
 }
 
-impl<'a> GlobalState<'a> {
-    pub fn exit(&self) -> bool {
-        matches!(self, GlobalState::Exit)
+impl<'a> State for GlobalState<'a> {
+    type RootState = Self;
+
+    fn expected_event(&self) -> ExpectedEvent {
+        match self {
+            GlobalState::SelectMap(_) => ExpectedEvent::SelectionHorizontal,
+            GlobalState::WaitForGameCreation(_) => ExpectedEvent::None,
+            GlobalState::CreateCharacter(s) => s.expected_event(),
+            GlobalState::PlayGame(s) => s.expected_event(),
+            GlobalState::Exit => ExpectedEvent::None,
+        }
     }
 
-    pub fn new(game: &'a GameDefinition, endpoint: &'a api::Endpoint) -> Self {
-        let global_state_data = GlobalStateData { game, endpoint };
-        let select_map_state_data = SelectMapDataImpl {
-            map_ids: game.maps.ids(),
-            curr_id: 0,
-        };
-
-        GlobalState::SelectMap(SelectMapData::new(global_state_data, select_map_state_data))
-    }
-
-    pub fn next(self, i: Input) -> Self {
+    fn next(self, i: Event) -> Self::RootState {
         match (self, i) {
-            (_, Input::Exit) => GlobalState::Exit,
-            unchanged @ (_, Input::Other) => unchanged.0,
+            (_, Event::Exit) => GlobalState::Exit,
+            unchanged @ (_, Event::Other) => unchanged.0,
 
             /* SelectMap */
-            (GlobalState::SelectMap(mut s), Input::PrintableChar('l'))
-            | (GlobalState::SelectMap(mut s), Input::Right) => {
+            (GlobalState::SelectMap(mut s), Event::Right) => {
                 if s.curr().curr_id == s.curr().map_ids.len() - 1 {
                     s.curr_mut().curr_id = 0
                 } else {
@@ -94,8 +101,7 @@ impl<'a> GlobalState<'a> {
                 }
                 GlobalState::SelectMap(s)
             }
-            (GlobalState::SelectMap(mut s), Input::PrintableChar('h'))
-            | (GlobalState::SelectMap(mut s), Input::Left) => {
+            (GlobalState::SelectMap(mut s), Event::Left) => {
                 if s.curr().curr_id == 0 {
                     s.curr_mut().curr_id = s.curr().map_ids.len() - 1;
                 } else {
@@ -103,7 +109,7 @@ impl<'a> GlobalState<'a> {
                 }
                 GlobalState::SelectMap(s)
             }
-            (GlobalState::SelectMap(s), Input::Confirm) => {
+            (GlobalState::SelectMap(s), Event::Confirm) => {
                 let map_id = *s.curr().map_ids.get(s.curr().curr_id).unwrap();
                 // TODO hardcoded team size
                 // TODO this can fail :)
@@ -118,10 +124,52 @@ impl<'a> GlobalState<'a> {
 
             (GlobalState::CreateCharacter(c), i) => c.next(i),
             unchanged @ (GlobalState::WaitForGameCreation(_), _) => unchanged.0,
+
+            unchanged @ (_, Event::Timeout) => unchanged.0,
             (s, i) => {
                 panic!("Input: {:?}\nState: {:?}", i, s);
             }
         }
+    }
+}
+
+impl<'a> GlobalState<'a> {
+    pub fn get_game_id(&self) -> Option<String> {
+        match self {
+            /* SelectMap */
+            GlobalState::SelectMap(_) => None,
+
+            GlobalState::CreateCharacter(c) => match c {
+                CreateCharacterState::Team(c)
+                | CreateCharacterState::Class(c)
+                | CreateCharacterState::Position(c)
+                | CreateCharacterState::Name(c) => Some(c.curr().game_id.clone()),
+            },
+
+            GlobalState::WaitForGameCreation(c) => {
+                Some(format!("{}/{}", c.curr().game_id, c.curr().login))
+            }
+            GlobalState::PlayGame(play) => match play {
+                PlayGameState::OurTurn(c) | PlayGameState::NotOurTurn(c) => {
+                    Some(format!("{}/{}", c.curr().game_id, c.curr().login))
+                }
+            },
+            GlobalState::Exit => unreachable!(),
+        }
+    }
+
+    pub fn exit(&self) -> bool {
+        matches!(self, GlobalState::Exit)
+    }
+
+    pub fn new(game: &'a GameDefinition, endpoint: &'a api::Endpoint) -> Self {
+        let global_state_data = GlobalStateData { game, endpoint };
+        let select_map_state_data = SelectMapDataImpl {
+            map_ids: game.maps.ids(),
+            curr_id: 0,
+        };
+
+        GlobalState::SelectMap(SelectMapData::new(global_state_data, select_map_state_data))
     }
 
     pub fn join_game(
@@ -152,20 +200,6 @@ impl<'a> GlobalState<'a> {
     }
 }
 
-/*
-#[derive(Debug)]
-pub enum JoinedGameState {
-    CreateCharacter,
-}
-
-#[derive(Debug)]
-pub struct JoinedGameState<'a> {
-    game_id: String,
-    game_state: GameState,
-    map: &'a GameMap,
-    substate: JoinedGameState,
-}
-*/
 #[derive(Debug)]
 pub struct SelectMapDataImpl {
     pub map_ids: Vec<Id<GameMap>>,
@@ -180,12 +214,22 @@ pub enum CreateCharacterState<'a> {
     Position(CreateCharacterStateData<'a>),
     Name(CreateCharacterStateData<'a>),
 }
-impl<'a> CreateCharacterState<'a> {
-    pub fn next(self, i: Input) -> GlobalState<'a> {
+impl<'a> State for CreateCharacterState<'a> {
+    type RootState = GlobalState<'a>;
+
+    fn expected_event(&self) -> ExpectedEvent {
+        match self {
+            CreateCharacterState::Team(_) => ExpectedEvent::SelectionHorizontal,
+            CreateCharacterState::Class(_) => ExpectedEvent::SelectionHorizontal,
+            CreateCharacterState::Position(_) => ExpectedEvent::Selection,
+            CreateCharacterState::Name(_) => ExpectedEvent::Char,
+        }
+    }
+
+    fn next(self, i: Event) -> Self::RootState {
         match (self, i) {
             // FIRST CHOOSE THE TEAM
-            (CreateCharacterState::Team(mut s), Input::PrintableChar('l'))
-            | (CreateCharacterState::Team(mut s), Input::Right) => {
+            (CreateCharacterState::Team(mut s), Event::Right) => {
                 if s.curr().team_index == s.curr().teams.len() - 1 {
                     s.curr_mut().team_index = 0;
                 } else {
@@ -193,8 +237,7 @@ impl<'a> CreateCharacterState<'a> {
                 }
                 GlobalState::CreateCharacter(CreateCharacterState::Team(s))
             }
-            (CreateCharacterState::Team(mut s), Input::PrintableChar('h'))
-            | (CreateCharacterState::Team(mut s), Input::Left) => {
+            (CreateCharacterState::Team(mut s), Event::Left) => {
                 if s.curr_mut().team_index == 0 {
                     s.curr_mut().team_index = s.curr().teams.len() - 1;
                 } else {
@@ -202,13 +245,12 @@ impl<'a> CreateCharacterState<'a> {
                 }
                 GlobalState::CreateCharacter(CreateCharacterState::Team(s))
             }
-            (CreateCharacterState::Team(s), Input::Confirm) => {
+            (CreateCharacterState::Team(s), Event::Confirm) => {
                 GlobalState::CreateCharacter(CreateCharacterState::Class(s))
             }
 
             // THEN THE CLASS
-            (CreateCharacterState::Class(mut s), Input::PrintableChar('l'))
-            | (CreateCharacterState::Class(mut s), Input::Right) => {
+            (CreateCharacterState::Class(mut s), Event::Right) => {
                 if s.curr().class_index == s.curr().classes.len() - 1 {
                     s.curr_mut().class_index = 0;
                 } else {
@@ -216,8 +258,7 @@ impl<'a> CreateCharacterState<'a> {
                 }
                 GlobalState::CreateCharacter(CreateCharacterState::Class(s))
             }
-            (CreateCharacterState::Class(mut s), Input::PrintableChar('h'))
-            | (CreateCharacterState::Class(mut s), Input::Left) => {
+            (CreateCharacterState::Class(mut s), Event::Left) => {
                 if s.curr_mut().class_index == 0 {
                     s.curr_mut().class_index = s.curr().classes.len() - 1;
                 } else {
@@ -225,13 +266,12 @@ impl<'a> CreateCharacterState<'a> {
                 }
                 GlobalState::CreateCharacter(CreateCharacterState::Class(s))
             }
-            (CreateCharacterState::Class(s), Input::Confirm) => {
+            (CreateCharacterState::Class(s), Event::Confirm) => {
                 GlobalState::CreateCharacter(CreateCharacterState::Position(s))
             }
 
             // THEN THE POSITION
-            (CreateCharacterState::Position(mut s), Input::PrintableChar('l'))
-            | (CreateCharacterState::Position(mut s), Input::Right) => {
+            (CreateCharacterState::Position(mut s), Event::Right) => {
                 let positions = &s.curr().map.teams.get(s.curr().team_index).unwrap().1;
                 if s.curr().position_index == positions.len() - 1 {
                     s.curr_mut().position_index = 0;
@@ -240,8 +280,7 @@ impl<'a> CreateCharacterState<'a> {
                 }
                 GlobalState::CreateCharacter(CreateCharacterState::Position(s))
             }
-            (CreateCharacterState::Position(mut s), Input::PrintableChar('h'))
-            | (CreateCharacterState::Position(mut s), Input::Left) => {
+            (CreateCharacterState::Position(mut s), Event::Left) => {
                 let positions = &s.curr().map.teams.get(s.curr().team_index).unwrap().1;
                 if s.curr_mut().position_index == 0 {
                     s.curr_mut().position_index = positions.len() - 1;
@@ -250,20 +289,20 @@ impl<'a> CreateCharacterState<'a> {
                 }
                 GlobalState::CreateCharacter(CreateCharacterState::Position(s))
             }
-            (CreateCharacterState::Position(s), Input::Confirm) => {
+            (CreateCharacterState::Position(s), Event::Confirm) => {
                 GlobalState::CreateCharacter(CreateCharacterState::Name(s))
             }
 
             // THEN THE NAME
-            (CreateCharacterState::Name(mut s), Input::PrintableChar(c)) => {
-                s.curr_mut().name.push(c);
+            (CreateCharacterState::Name(mut s), Event::PrintableString(string)) => {
+                s.curr_mut().name.push_str(&string);
                 GlobalState::CreateCharacter(CreateCharacterState::Name(s))
             }
-            (CreateCharacterState::Name(mut s), Input::Backspace) => {
+            (CreateCharacterState::Name(mut s), Event::Backspace) => {
                 s.curr_mut().name.pop();
                 GlobalState::CreateCharacter(CreateCharacterState::Name(s))
             }
-            (CreateCharacterState::Name(s), Input::Confirm) => {
+            (CreateCharacterState::Name(s), Event::Confirm) => {
                 debug!("Creating character with name {}", s.curr().name);
                 let (global, create_char) = s.split();
                 let name = create_char.name;
@@ -296,8 +335,7 @@ impl<'a> CreateCharacterState<'a> {
                     },
                 ))
             }
-            //
-            _ => unimplemented!(),
+            unchanged => GlobalState::CreateCharacter(unchanged.0),
         }
     }
 }
@@ -316,45 +354,36 @@ pub struct CreateCharacterStateDataImpl<'a> {
 pub type CreateCharacterStateData<'a> =
     StateData<GlobalStateData<'a>, CreateCharacterStateDataImpl<'a>>;
 
-/*
-    pub fn next(self, i: Input) -> GlobalState<'a> {
-        match self {
-            CreateGameState::WaitingForOtherPlayers(c) => {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                let game_state = c.prev().endpoint.game_state(&c.curr().game_id);
-                if let Some(game_state) = game_state {
-                    GlobalState::PlayGame(PlayGameState::NotOurTurn(StateData::new(
-                        c.split().0,
-                        PlayGameStateDataImpl {
-                            cell: Id::new(0),
-                            game_state,
-                        },
-                    )))
-                } else {
-                    GlobalState::CreateGame(CreateGameState::WaitingForOtherPlayers(c))
-                }
-            }
-            CreateGameState::CreateCharacter(c) => c.next(i),
-        }
-}
-*/
-
 #[derive(Debug)]
 pub enum PlayGameState<'a> {
     OurTurn(PlayGameStateData<'a>),
     NotOurTurn(PlayGameStateData<'a>),
 }
-impl<'a> PlayGameState<'a> {
-    pub fn next(self, i: Input) -> GlobalState<'a> {
+impl<'a> State for PlayGameState<'a> {
+    type RootState = GlobalState<'a>;
+
+    fn expected_event(&self) -> ExpectedEvent {
+        match self {
+            PlayGameState::NotOurTurn(_) => ExpectedEvent::None,
+            PlayGameState::OurTurn(_) => unimplemented!(),
+        }
+    }
+
+    fn next(self, i: Event) -> Self::RootState {
         unimplemented!()
     }
 }
+
 #[derive(Debug)]
-pub struct PlayGameStateDataImpl {
+pub struct PlayGameStateDataImpl<'a> {
     pub cell: Id<Cell>,
     pub game_state: GameState,
+    pub map: &'a GameMap,
+    pub game_id: String,
+    pub login: String,
+    pub id: Id<Character>,
 }
-pub type PlayGameStateData<'a> = StateData<GlobalStateData<'a>, PlayGameStateDataImpl>;
+pub type PlayGameStateData<'a> = StateData<GlobalStateData<'a>, PlayGameStateDataImpl<'a>>;
 
 #[derive(Debug)]
 pub struct WaitForGameCreationDataImpl<'a> {
