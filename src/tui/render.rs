@@ -1,4 +1,6 @@
-use crate::state::{CreateCharacterState, GlobalState, PlayGameState, SelectMapData};
+use crate::state::{
+    CreateCharacterState, CreateOrJoinState, GlobalState, PlayGameState, SelectMapData,
+};
 use crate::tui::map::FormatMap;
 use log::{debug, info};
 use pewcraft_common::game::GameDefinition;
@@ -30,8 +32,18 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
         Renderer { f, s, g, chunks }.render_impl();
     }
 
+    fn invert_text() -> Style {
+        let style = Style::default();
+        let fg = style.fg;
+        let bg = style.bg;
+        style.bg(fg).fg(bg)
+    }
+
     fn render_impl(self) {
         match self.s {
+            GlobalState::CreateOrJoin(create_or_join) => {
+                self.create_or_join(create_or_join);
+            }
             GlobalState::CreateCharacter(create_character) => {
                 self.create_character(create_character);
             }
@@ -58,13 +70,35 @@ impl<'a, 'b, 'c, B: tui::backend::Backend> Renderer<'a, 'b, 'c, B> {
         };
     }
 
-    /*
-    match create_character {
-        CreateGameState::WaitingForOtherPlayers(_) => {
-        }
-        CreateGameState::CreateCharacter(s) => self.create_character(&s),
+    fn create_or_join(self, create_or_join: &CreateOrJoinState) {
+        let text = match create_or_join {
+            CreateOrJoinState::Create(s) => [
+                Text::raw("    "),
+                Text::styled("CREATE", Self::invert_text()),
+                Text::raw("\n or "),
+                Text::raw("JOIN"),
+                Text::raw("Login: "),
+                Text::raw(&s.curr().login),
+            ],
+            CreateOrJoinState::Join(s) => [
+                Text::raw("    "),
+                Text::raw("CREATE"),
+                Text::raw("\n or "),
+                Text::styled("JOIN", Self::invert_text()),
+                Text::raw("Login: "),
+                Text::raw(&s.curr().login),
+            ],
+        };
+
+        Paragraph::new(text.iter())
+            .block(
+                Block::default()
+                    .title(CREATE_CHAR_BLOCK_TITLE)
+                    .borders(Borders::ALL),
+            )
+            .alignment(Alignment::Left)
+            .render(self.f, self.chunks[1]);
     }
-    */
 
     fn create_character(self, create_character: &CreateCharacterState) {
         let map = match create_character {

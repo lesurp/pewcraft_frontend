@@ -15,6 +15,7 @@ pub enum Event {
     Up,
     Down,
     Backspace,
+    Cancel,
     Confirm,
     Other,
 }
@@ -60,7 +61,7 @@ impl<P, C> StateData<P, C> {
 
 #[derive(Debug)]
 pub enum GlobalState<'a> {
-    //CreateOrJoin,
+    CreateOrJoin(CreateOrJoinState<'a>),
     SelectMap(SelectMapData<'a>),
     WaitForGameCreation(WaitForGameCreationData<'a>),
     CreateCharacter(CreateCharacterState<'a>),
@@ -79,6 +80,7 @@ impl<'a> State for GlobalState<'a> {
 
     fn expected_event(&self) -> ExpectedEvent {
         match self {
+            GlobalState::CreateOrJoin(s) => s.expected_event(),
             GlobalState::SelectMap(_) => ExpectedEvent::SelectionHorizontal,
             GlobalState::WaitForGameCreation(_) => ExpectedEvent::None,
             GlobalState::CreateCharacter(s) => s.expected_event(),
@@ -136,7 +138,7 @@ impl<'a> State for GlobalState<'a> {
 impl<'a> GlobalState<'a> {
     pub fn get_game_id(&self) -> Option<String> {
         match self {
-            /* SelectMap */
+            GlobalState::CreateOrJoin(_) => None,
             GlobalState::SelectMap(_) => None,
 
             GlobalState::CreateCharacter(c) => match c {
@@ -164,12 +166,12 @@ impl<'a> GlobalState<'a> {
 
     pub fn new(game: &'a GameDefinition, endpoint: &'a api::Endpoint) -> Self {
         let global_state_data = GlobalStateData { game, endpoint };
-        let select_map_state_data = SelectMapDataImpl {
-            map_ids: game.maps.ids(),
-            curr_id: 0,
-        };
-
-        GlobalState::SelectMap(SelectMapData::new(global_state_data, select_map_state_data))
+        GlobalState::CreateOrJoin(CreateOrJoinState::Create(CreateOrJoinData::new(
+            global_state_data,
+            CreateOrJoinDataImpl {
+                login: String::new(),
+            },
+        )))
     }
 
     pub fn join_game(
@@ -191,12 +193,128 @@ impl<'a> GlobalState<'a> {
                 .map(|(index, _)| Id::new(index))
                 .collect(),
             map,
-            game_id: created_game.0,
+            game_id: created_game.game_id,
         };
 
         let state_data = StateData::new(s.split().0, create_character_state_data);
         let create_character_state = CreateCharacterState::Team(state_data);
         GlobalState::CreateCharacter(create_character_state)
+    }
+}
+
+#[derive(Debug)]
+pub struct CreateOrJoinDataImpl {
+    pub login: String,
+}
+
+#[derive(Debug)]
+pub enum CreateOrJoinState<'a> {
+    Create(CreateOrJoinData<'a>),
+    Join(CreateOrJoinData<'a>),
+}
+pub type CreateOrJoinData<'a> = StateData<GlobalStateData<'a>, CreateOrJoinDataImpl>;
+
+impl<'a> State for CreateOrJoinState<'a> {
+    type RootState = GlobalState<'a>;
+
+    fn expected_event(&self) -> ExpectedEvent {
+        match self {
+            CreateOrJoinState::Join(_) => ExpectedEvent::Char,
+            CreateOrJoinState::Create(_) => ExpectedEvent::None,
+        }
+    }
+
+    fn next(self, i: Event) -> Self::RootState {
+        match (self, i) {
+            (CreateOrJoinState::Join(s), Event::Right)
+            | (CreateOrJoinState::Join(s), Event::Up)
+            | (CreateOrJoinState::Join(s), Event::Down)
+            | (CreateOrJoinState::Join(s), Event::Left) => {
+                GlobalState::CreateOrJoin(CreateOrJoinState::Create(s))
+            }
+            (CreateOrJoinState::Join(mut s), Event::PrintableString(string)) => {
+                s.curr_mut().login.push_str(&string);
+                GlobalState::CreateOrJoin(CreateOrJoinState::Join(s))
+            }
+            (CreateOrJoinState::Join(s), Event::Cancel) => {
+                GlobalState::CreateOrJoin(CreateOrJoinState::Create(s))
+            }
+            (CreateOrJoinState::Join(s), Event::Confirm) => {
+                let (global, join) = s.split();
+                let login = &join.login;
+                match login.len() {
+                    10 => {
+                        let joined_game = global.endpoint.join_game(login);
+                        match joined_game {
+                            None => GlobalState::CreateOrJoin(CreateOrJoinState::Create(
+                                CreateOrJoinData::new(global, join),
+                            )),
+                            Some(game_info) => {
+                                let map = global.game.maps.get(game_info.map).unwrap();
+                                let create_character_state_data = CreateCharacterStateDataImpl {
+                                    name: String::new(),
+                                    class_index: 0,
+                                    team_index: 0,
+                                    position_index: 0,
+
+                                    classes: global.game.classes.ids(),
+                                    teams: map
+                                        .teams
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(index, _)| Id::new(index))
+                                        .collect(),
+                                    map,
+                                    game_id: game_info.game_id,
+                                };
+                                let state_data =
+                                    StateData::new(global, create_character_state_data);
+                                let create_character_state = CreateCharacterState::Team(state_data);
+                                GlobalState::CreateCharacter(create_character_state)
+                            }
+                        }
+                    }
+                    21 => {
+                        if login.chars().nth(10).unwrap() != '/' {
+                            GlobalState::CreateOrJoin(CreateOrJoinState::Create(
+                                CreateOrJoinData::new(global, join),
+                            ))
+                        } else {
+                            let game_id = &login[..10];
+                            let char_id = &login[11..];
+                            let joined_game = global.endpoint.join_game_with_char(game_id, char_id);
+                            unimplemented!()
+                            //match joined_game
+                        }
+                    }
+                    _ => GlobalState::CreateOrJoin(CreateOrJoinState::Create(
+                        CreateOrJoinData::new(global, join),
+                    )),
+                }
+            }
+
+            (CreateOrJoinState::Create(s), Event::Right)
+            | (CreateOrJoinState::Create(s), Event::Up)
+            | (CreateOrJoinState::Create(s), Event::Down)
+            | (CreateOrJoinState::Create(s), Event::Left) => {
+                GlobalState::CreateOrJoin(CreateOrJoinState::Join(s))
+            }
+            (CreateOrJoinState::Create(s), Event::Confirm) => {
+                let global = s.split().0;
+                let global_state_data = GlobalStateData {
+                    game: global.game,
+                    endpoint: global.endpoint,
+                };
+                let select_map_state_data = SelectMapDataImpl {
+                    map_ids: global_state_data.game.maps.ids(),
+                    curr_id: 0,
+                };
+
+                GlobalState::SelectMap(SelectMapData::new(global_state_data, select_map_state_data))
+            }
+
+            unchanged => GlobalState::CreateOrJoin(unchanged.0),
+        }
     }
 }
 
