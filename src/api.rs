@@ -38,6 +38,34 @@ impl Endpoint {
             .unwrap()
     }
 
+    pub fn join_game<S: AsRef<str>>(&self, game_id: S) -> Option<WireCreatedGame> {
+        unimplemented!()
+            /*
+        debug!("Creating char with request: {:?}", request);
+        self.client
+            .post(self.url.join(game_id.as_ref()).unwrap())
+            .json(&request)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+            */
+    }
+
+    pub fn join_game_with_char<S: AsRef<str>>(&self, game_id: S, char_id: S) -> Option<WireCreatedGame> {
+        unimplemented!()
+            /*
+        debug!("Creating char with request: {:?}", request);
+        self.client
+            .post(self.url.join(game_id.as_ref()).unwrap())
+            .json(&request)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+            */
+    }
+
     pub fn create_char<S: AsRef<str>>(&self, game_id: S, request: WireNewCharRequest) -> WireCreatedChar {
         debug!("Creating char with request: {:?}", request);
         self.client
